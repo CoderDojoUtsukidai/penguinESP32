@@ -1,20 +1,20 @@
 #include <WiFiClient.h>
-#include <ESP32WebServer.h>
+#include <ESPAsyncWebServer.h>
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
 int led = 2;
 /* change your ssid and password here */
+const char* ssid     = "penguin1";
+const char* password = "penguin1";
 
-const char* ssid     = "xxxxx";
-const char* password = "zzzzz";
-
-ESP32WebServer server(80);
+AsyncWebServer server(80);
 
 // Motor A
 const int motor1Pin1 = 27;
-const int motor1Pin2 = 26;
-const int motor2Pin1 = 14;
+const int motor2Pin1 = 26;//14;
+
+const int motor1Pin2 = 14;//26;
 const int motor2Pin2 = 16;
 
 const int servoPin = 12;
@@ -53,9 +53,7 @@ String form = "<!DOCTYPE html><html><head><meta name=viewport content=width=100>
               "<div id='res'></div>"
               "<hr>"
               "<form action=ST><input type=submit value=STOP></form>"
-              "<form action=FD><input type=submit value=FORWADR></form>"
-              "<form action=TL><input type=submit value=LEFT></form>"
-              "<form action=TR><input type=submit value=RIGH></form>"
+              "<form action=FD><input type=submit value=FORWARD></form>"
               "<form action=BK><input type=submit value=BACK></form>"
               "</body></html>";
 
@@ -65,6 +63,7 @@ int servoPulse(int angleDegrees)
   int pulseWidth = map(angleDegrees, 0, 180, 600, 2400);
   return pulseWidth;
 }
+
 /* this function check the rotation angle
   and trigger pulse accordingly*/
 void servoGo(int oldAngle, int newAngle)
@@ -98,27 +97,34 @@ void servoGo(int oldAngle, int newAngle)
     }
   }
 }
-/* this callback will be invoked when get servo rotation request */
-void handleServo() {
-  //Serial.println(server.argName(0));
-  int newAngle = server.arg(0).toInt();
-  servoGo(oldAngle, newAngle);
-  oldAngle = newAngle;
-  server.send(200, "text/html", "ok");
+
+void serverSend(AsyncWebServerRequest *request, int status_code, const String& content_type, const String& content) {
+  AsyncWebServerResponse *response = request->beginResponse(status_code, content_type, content);
+  response->addHeader("Access-Control-Allow-Origin", "*");
+  request->send(response);
 }
 
-void handleNotFound() {
+/* this callback will be invoked when get servo rotation request */
+void handleServo(AsyncWebServerRequest *request) {
+  //Serial.println(server.argName(0));
+  int newAngle = atoi(request->getParam(0)->value().c_str());
+  servoGo(oldAngle, newAngle);
+  oldAngle = newAngle;
+  serverSend(request, 200, "text/html", "ok");
+}
+
+void handleNotFound(AsyncWebServerRequest *request) {
   String message = "File Not Found\n\n";
-  server.send(404, "text/plain", message);
+  serverSend(request, 404, "text/plain", message);
 }
 
 /* プロトタイプ宣言*/
-void handleRoot();
-void handle_stop();
-void handle_forward();
-void handle_turn_left();
-void handle_turn_right();
-void handle_back();
+void handleRoot(AsyncWebServerRequest *);
+void handle_stop(AsyncWebServerRequest *);
+void handle_forward(AsyncWebServerRequest *);
+void handle_turn_left(AsyncWebServerRequest *);
+void handle_turn_right(AsyncWebServerRequest *);
+void handle_back(AsyncWebServerRequest *);
 void ST_ACT();
 void FD_ACT();
 void TL_ACT();
@@ -128,10 +134,24 @@ void BK_ACT();
 void setup(void) {
 
   Serial.begin(115200);
-  WiFi.begin(ssid, password);
-  //  WiFi.begin(ssid2, password2);
   Serial.println("");
+
+  // Configure static IP
+  IPAddress ip(172,24,1,2);
+  IPAddress gateway(172,24,1,1);
+  IPAddress subnet(255, 255, 255, 0);
+  IPAddress primaryDNS(8, 8, 8, 8); //optional
+  IPAddress secondaryDNS(8, 8, 4, 4); //optional
+
+  if (WiFi.config(ip, gateway, subnet, primaryDNS, secondaryDNS)) {
+    Serial.println("Configured IP");
+  }
+  else {
+    Serial.println("STA Failed to configure");
+  }
+  
   // Wait for connection
+  WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
@@ -146,17 +166,17 @@ void setup(void) {
     Serial.println("MDNS responder started");
   }
 
-  server.on("/", handleRoot);
-  server.on("/ang", handleServo);
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/ang", HTTP_GET, handleServo);
 
   server.onNotFound(handleNotFound);
 
   /* 各アクション時のハンドル設定*/
-  server.on("/ST", handle_stop);
-  server.on("/FD", handle_forward);
-  server.on("/TL", handle_turn_left);
-  server.on("/TR", handle_turn_right);
-  server.on("/BK", handle_back);
+  server.on("/ST", HTTP_GET, handle_stop);
+  server.on("/FD", HTTP_GET, handle_forward);
+  server.on("/TL", HTTP_GET, handle_turn_left);
+  server.on("/TR", HTTP_GET, handle_turn_right);
+  server.on("/BK", HTTP_GET, handle_back);
 
   server.begin();
   pinMode(servoPin, OUTPUT);
@@ -174,49 +194,50 @@ void setup(void) {
   pinMode(led, OUTPUT);
   Serial.println("led => 2");
   digitalWrite(led, HIGH);
+
+  server.begin();
 }
 
 void loop(void) {
-  server.handleClient();
 }
 
 /*------ ここから下は全て新しく追加するプログラムです----------*/
 /* 各ハンドルの内容記述*/
 /* ハンドル初期状態の記述*/
-void handleRoot() {
-  server.send(200, "text/html", form);
+void handleRoot(AsyncWebServerRequest *request) {
+  serverSend(request, 200, "text/html", form);
 }
 /* ストップハンドルの記述*/
-void handle_stop() {
+void handle_stop(AsyncWebServerRequest *request) {
   Serial.println("STOP");
   digitalWrite(led, LOW);
   ST_ACT();
-  server.send(200, "text/html", form);
+  serverSend(request, 200, "text/html", form);
 }
 /* 前進ハンドルの記述*/
-void handle_forward() {
+void handle_forward(AsyncWebServerRequest *request) {
   Serial.println("FORWARD");
   digitalWrite(led, HIGH);
   FD_ACT();
-  server.send(200, "text/html", form);
+  serverSend(request, 200, "text/html", form);
 }
 /* 左折ハンドルの記述*/
-void handle_turn_left() {
+void handle_turn_left(AsyncWebServerRequest *request) {
   Serial.println("LEFT");
   TL_ACT();
-  server.send(200, "text/html", form);
+  serverSend(request, 200, "text/html", form);
 }
 /* 右折ハンドルの記述*/
-void handle_turn_right() {
+void handle_turn_right(AsyncWebServerRequest *request) {
   Serial.println("RIGHT");
   TR_ACT();
-  server.send(200, "text/html", form);
+  serverSend(request, 200, "text/html", form);
 }
 /* バックハンドルの記述*/
-void handle_back() {
+void handle_back(AsyncWebServerRequest *request) {
   Serial.println("BACK");
   BK_ACT();
-  server.send(200, "text/html", form);
+  serverSend(request, 200, "text/html", form);
 }
 /*-------------- 各ハンドル記述内の関数内容------------------*/
 /* ストップの関数*/
@@ -228,29 +249,34 @@ void ST_ACT() {
 }
 /* 前進の関数*/
 void FD_ACT() {
+  ST_ACT();
+  digitalWrite(led, HIGH);
   digitalWrite(motor1Pin1, HIGH);
-  digitalWrite(motor1Pin2, LOW);
-  digitalWrite(motor2Pin1, HIGH);
-  digitalWrite(motor2Pin2, LOW);
+  digitalWrite(motor1Pin2, HIGH);
+//  digitalWrite(motor2Pin1, LOW);
+//  digitalWrite(motor2Pin2, LOW);
 }
 /* 左折の関数*/
 void TL_ACT() {
-  digitalWrite(motor1Pin1, HIGH);
-  digitalWrite(motor1Pin2, LOW);
-  digitalWrite(motor2Pin1, LOW);
-  digitalWrite(motor2Pin2, LOW);
+  ST_ACT();
+//  digitalWrite(motor1Pin1, LOW);
+  digitalWrite(motor1Pin2, HIGH);
+//  digitalWrite(motor2Pin1, LOW);
+//  digitalWrite(motor2Pin2, LOW);
 }
 /* 右折の関数*/
 void TR_ACT() {
-  digitalWrite(motor1Pin1, LOW);
-  digitalWrite(motor1Pin2, LOW);
-  digitalWrite(motor2Pin1, HIGH);
-  digitalWrite(motor2Pin2, LOW);
+  ST_ACT();
+  digitalWrite(motor1Pin1, HIGH);
+//  digitalWrite(motor1Pin2, LOW);
+//  digitalWrite(motor2Pin1, HIGH);
+//  digitalWrite(motor2Pin2, LOW);
 }
 /* バックの関数*/
 void BK_ACT() {
-  digitalWrite(motor1Pin1, LOW);
-  digitalWrite(motor1Pin2, HIGH);
-  digitalWrite(motor2Pin1, LOW);
+  ST_ACT();
+//  digitalWrite(motor1Pin1, LOW);
+//  digitalWrite(motor1Pin2, HIGH);
+  digitalWrite(motor2Pin1, HIGH);
   digitalWrite(motor2Pin2, HIGH);
 }
